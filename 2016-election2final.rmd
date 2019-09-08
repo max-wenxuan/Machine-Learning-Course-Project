@@ -1,0 +1,802 @@
+---
+title: "2016 Election Prediction"
+author: "Wenxuan Luo, 5016308 (PSTAT 131)"
+date: "5/21/2019"
+output:
+  pdf_document: default
+  html_document:
+    self_contained: no
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+indent1 = '    '
+indent2 = paste(rep(indent1, 2), collapse='')
+indent3 = paste(rep(indent1, 3), collapse='')
+
+doeval = FALSE
+
+
+library(knitr)
+library(tidyverse)
+library(ggmap)
+library(maps)
+library(Rtsne)
+library(NbClust)
+library(tree)
+library(maptree)
+library(class)
+library(reshape2)
+```
+
+Predicting voter behavior is complicated for many reasons despite the tremendous effort in collecting, analyzing, and understanding many available datasets. 
+For our final project, we will analyze the 2016 presidential election dataset, but, first, some background.
+
+# Background
+
+The presidential election in 2012 did not come as a surprise. Some correctly predicted the outcome of the election correctly including [Nate Silver](https://en.wikipedia.org/wiki/Nate_Silver), 
+and [many speculated his approach](https://www.theguardian.com/science/grrlscientist/2012/nov/08/nate-sliver-predict-us-election).
+
+Despite the success in 2012, the 2016 presidential election came as a 
+[big surprise](https://fivethirtyeight.com/features/the-polls-missed-trump-we-asked-pollsters-why/) 
+to many, and it was a clear example that even the current state-of-the-art technology can surprise us.
+
+Answer the following questions in one paragraph for each.
+
+1. What makes voter behavior prediction (and thus election forecasting) a hard problem?
+  Human is a thoughtful animal. There are many factors that determine a person's choice. First of all, from the perspective of candidates, the candidates' political position, political leadership and speaking ability determine the voters' behavior. Secondly, from the perspective of voters, the performance of candidates during their presidency and whether they bring benefits to themselves will determine voters' election behavior. Many determinants determine the difficulty of voter forecasting.
+  
+2. What was unique to Nate Silver's approach in 2012 that allowed him to achieve good predictions?
+  Nate Silver's initial idea was to aggregate the results of several survey companies' sub-state surveys (such as Barack Obama's 36.7 support rate in Alabama) and calculate the error rate based on historical data (such as Alabama's 3.8, which is controversial, because Nate refused to publish the weighted method), multiplying by the number of members of the state's electoral Corps (such as Alabama's 9). This is to defeat the individual with collective wisdom.
+  
+3. What went wrong in 2016? What do you think should be done to make future predictions better?
+  Voter data predicted that Hillary Clinton would win the election, but Donald Trump won. To make future predictions better, we should consider more factors, get more voter data, and train better prediction models.
+
+
+# Data
+
+```{r data}
+election.raw = read.csv("data/election/election.csv") %>% as.tbl
+census_meta = read.csv("data/census/metadata.csv", sep = ";") %>% as.tbl
+census = read.csv("data/census/census.csv") %>% as.tbl
+census$CensusTract = as.factor(census$CensusTract)
+```
+
+## Election data
+
+Following is the first few rows of the `election.raw` data:
+
+```{r, echo=FALSE}
+kable(election.raw %>% head)
+```
+
+The meaning of each column in `election.raw` is clear except `fips`. The accronym is short for [Federal Information Processing Standard](https://en.wikipedia.org/wiki/FIPS_county_code).
+
+In our dataset, `fips` values denote the area (US, state, or county) that each row of data represent: i.e., some rows in `election.raw` are summary rows. These rows have `county` value of `NA`. There are two kinds of summary rows:
+
+* Federal-level summary rows have `fips` value of `US`.
+* State-level summary rows have names of each states as `fips` value.
+
+## Census data
+
+Following is the first few rows of the `census` data:
+
+```{r, echo=FALSE}
+kable(census %>% head)
+```
+
+### Census data: column metadata
+
+
+```{r, dependson=data, echo=FALSE}
+kable(census_meta)
+```
+
+## Data wrangling
+4. 
+```{r}
+election_federal <- election.raw %>% filter(fips == 'US')
+
+election.raw.fix <- election.raw %>% filter( fips != 'US')
+
+election_state <- election.raw.fix %>% filter(is.na(county) == T)
+
+election <- election.raw.fix %>% filter(is.na(county) == F)
+
+```
+
+
+5. 
+
+```{r}
+#31
+levels(election.raw$candidate)
+names <-unique(election_federal$candidate)
+votingnmbrs <-length(names)
+ggplot(data=election_federal, aes(x=candidate))+geom_bar(aes(weight=log(votes)))+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust = 0.5))+ylab("Number of Votes")+ggtitle("All Votes for Each Candidate")
+```
+Answer:31 presidential candidates were there in the 2016 election.
+
+6.
+  
+```{r}
+
+county_winner <- election %>% group_by(fips) %>% mutate(pct = votes/sum(votes))%>% top_n(1)
+
+state_winner <- election_state %>%
+  group_by(fips) %>%
+  mutate(pct = votes/sum(votes)) %>% top_n(1)
+
+kable(county_winner %>% head) 
+
+kable(state_winner %>% head)  
+
+```
+    
+# Visualization
+
+
+
+```{r, message=FALSE}
+states = map_data("state")
+
+ggplot(data = states) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+
+
+7. 
+
+```{r}
+counties = map_data("county")
+
+ggplot(data = counties) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+
+8. 
+
+```{r}
+states$fips <- state.abb[match(states$region,tolower(state.name))]
+map_candidate <- left_join(states, state_winner, by = c("fips"="state"))
+ggplot(data = map_candidate) + 
+  geom_polygon(aes(x = long, y = lat, fill = candidate, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)
+```
+
+
+
+
+9. 
+  
+```{r}
+t <- str_split_fixed(county.fips$polyname, ",", 2)
+county.fips$region <- t[,1]
+county.fips$subregion <- t[,2]
+county <- left_join(county.fips, counties, by = c("region"="region","subregion"="subregion"))
+county$fips <- sapply(county$fips, as.character)
+county_winner$fips <- sapply(county_winner$fips, as.character)
+map_county_candidate <- left_join(county, county_winner, by = c("fips"="fips"))
+ggplot(data = map_county_candidate) + 
+  geom_polygon(aes(x = long, y = lat, fill = candidate, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)
+```
+
+  
+10. 
+
+```{r}
+census.tt = census%>% filter(complete.cases(.))
+pie(c(sum(census.tt$Hispanic), sum(census.tt$White),sum(census.tt$Black),sum(census.tt$Native),sum(census.tt$Asian),sum(census.tt$Pacific)),
+    c('Hispanic','White','Black','Native','Asian','Pacific'))
+```
+Answer: According to the attached articles, deomogrphics played a hugh part in this election. So we wanted to visualize the voters of this election. As we can see, the white population has a big proportion in the plot, which could indicate the white population is a one of the influential factors in this election.
+
+    
+11. 
+
+
+```{r}
+census.del = census%>% filter(complete.cases(.)) %>%
+  mutate(Men=Men/TotalPop, Employed=Employed/TotalPop, Citizen=Citizen/TotalPop, Minority=Hispanic+Black+Asian+Pacific+Native) %>%
+  select(-c(Walk,PublicWork,Construction,Women,Hispanic,Black,Asian,Pacific,Native))
+
+census.subct <- census.del%>%
+  group_by(State,County)%>%
+  add_tally(TotalPop)%>%
+  mutate(Weight=TotalPop/n)
+
+census.ct <- census.subct%>%
+  summarise_at(vars(Men:Minority),funs(weighted.mean(.,Weight)))
+
+head(census.ct)
+head(census.subct)
+
+```    
+
+
+
+
+# Dimensionality reduction
+
+12. 
+```{r}
+ct.pc_all <- prcomp(census.ct[,c(-1,-2)], scale. = TRUE)
+ct.pc <- as.data.frame(ct.pc_all$x)
+subct.pc_all <- prcomp(census.subct[,c(-1,-2,-3)],scale. = TRUE)
+subct.pc <- as.data.frame(subct.pc_all$x)
+
+ct.pc_all$rotation[,1:2]
+subct.pc_all$rotation[,1:2]
+```
+```{r}
+pc1.ct <- head(sort(abs(ct.pc_all$rotation[,1]),decreasing = TRUE),n=1)
+pc2.ct <- head(sort(abs(ct.pc_all$rotation[,2]),decreasing = TRUE),n=1)
+
+pc1.subct <- head(sort(abs(subct.pc_all$rotation[,1]),decreasing = TRUE),n=1)
+pc2.subct <- head(sort(abs(subct.pc_all$rotation[,2]),decreasing = TRUE),n=1)
+
+pc1.ct
+pc2.ct
+pc1.subct
+pc2.subct
+```
+Answer: For county level data, the first two principle components PC1 and PC2 are Per capita income and PrivateWork. For sub-county level data, the first two principle components PC1 and PC2 are Per capita income and Transit.
+
+# Clustering
+
+13.
+
+```{r}
+labels.census.ct <- paste(census.ct$State,census.ct$County,sep = ",")
+scale.census.ct <- scale(census.ct[,c(-1,-2)])
+row.names(scale.census.ct) <- labels.census.ct
+dist <- dist(scale.census.ct, method = "euclidean")
+hc.census.ct <- hclust(dist, method = "complete")
+clustersa <- cutree(hc.census.ct, k=10)
+
+plot(hc.census.ct,labels=census.ct$County, hang=-1,cex=0.25)
+rect.hclust(hc.census.ct,k=10)
+datacluster <- data.frame(census.ct, clustersa)
+SanMateocluster <- datacluster %>% filter(datacluster[2] == "San Mateo")
+SanMateogroup <- datacluster %>% filter(clustersa == as.integer(SanMateocluster$clustersa)) 
+group <- nrow(SanMateogroup)
+group #the group has 105 obs
+
+#5 PC
+ct.pc.cluster <- data.frame(ct.pc_all$x[,1:5])
+scale.ct.pc <- scale(ct.pc.cluster)
+row.names(scale.ct.pc) <- labels.census.ct
+distpc <- dist(scale.ct.pc, method = "euclidean")
+hc.pc.ct <- hclust(distpc, method = "complete")
+clusterspc <- cutree(hc.pc.ct, k =10)
+plot(hc.pc.ct,labels=census.ct$County, hang=-1,cex=0.25)
+rect.hclust(hc.pc.ct,k=10)
+
+dataclusterpca <- data.frame(census.ct, clusterspc)
+SanMateocluster <- dataclusterpca %>% filter(dataclusterpca[2] == "San Mateo")
+SanMateogroupPCA <- dataclusterpca %>% filter(clusterspc == as.integer(SanMateocluster$clusterspc)) 
+grouppca <- nrow(SanMateogroupPCA)
+grouppca #there group has 46 obs
+
+clustersa[which(census.ct$County == "San Mateo")] #in cluster 7
+clusterspc[which(census.ct$County == "San Mateo")] #in cluster 6
+
+grep("San Mateo",names(clustersa))
+grep("San Mateo",names(clusterspc))
+clusterspc[227]
+clustersa[227]
+```
+Answer: As the result above, the San Mateo County was placed in different Clusters. After performing hierarchical clustering using the whole dataset, there are 105 observations in the cluster containing San Mateo. The hierarchical clustering method with the first 5 principal components, we find only 46 observations in the cluster that contains San Mateo. The numbers of observations in the cluster are quite different. By comparing with both cluster data, some counties are shown in both clusters. We assume that those counties are placed in that one cluster since they share some features that are similar. And after using principal component analysis to the data, the hierarchical clustering could find even more features, so that San Mateo is placed in a smaller group that the counties share a more unique feature, that is why San Mateo is placed in different clusters in two methods. However, both sample size is relatively small, it is hard to tell which method perofroms better.
+
+# Classification
+
+
+```{r}
+tmpwinner = county_winner %>% ungroup %>%
+  mutate(state = state.name[match(state, state.abb)]) %>%               ## state abbreviations
+  mutate_at(vars(state, county), tolower) %>%                           ## to all lowercase
+  mutate(county = gsub(" county| columbia| city| parish", "", county))  ## remove suffixes
+tmpcensus = census.ct %>% ungroup %>% mutate_at(vars(State, County), tolower)
+
+election.cl = tmpwinner %>%
+  left_join(tmpcensus, by = c("state"="State", "county"="County")) %>% 
+  na.omit
+
+## saves meta information to attributes
+attr(election.cl, "location") = election.cl %>% select(c(county, fips, state, votes, pct))
+election.cl = election.cl %>% select(-c(county, fips, state, votes, pct))
+```
+
+Using the following code, partition data into 80% training and 20% testing:
+```{r}
+set.seed(10) 
+n = nrow(election.cl)
+election.cl <- data.frame(election.cl)
+in.trn= sample.int(n, 0.8*n) 
+trn.cl = election.cl[ in.trn,]
+tst.cl = election.cl[-in.trn,]
+```
+
+Using the following code, define 10 cross-validation folds:
+```{r}
+set.seed(20) 
+nfold = 10
+folds = sample(cut(1:nrow(trn.cl), breaks=nfold, labels=FALSE))
+```
+
+Using the following error rate function:
+```{r}
+calc_error_rate = function(predicted.value, true.value){
+  return(mean(true.value!=predicted.value))
+}
+records = matrix(NA, nrow=3, ncol=2)
+colnames(records) = c("train.error","test.error")
+rownames(records) = c("tree","knn","Logistic Regression ")
+```
+
+## Classification: native attributes
+
+13.  
+```{r}
+YTrain = trn.cl$candidate
+XTrain = dplyr::select(trn.cl,-candidate)
+YTest = tst.cl$candidate
+XTest = dplyr::select(tst.cl,-candidate)
+```
+    
+```{r}
+library(ROCR)
+
+set.seed(1)
+
+el.tree <- tree(candidate~. ,data = trn.cl, control = tree.control(nobs = nrow(trn.cl)))
+summary(el.tree)
+
+el.cvtree <- cv.tree(el.tree, folds, FUN = prune.misclass, K = nfold) ##
+sizedev <- as.data.frame(cbind(el.cvtree$size, el.cvtree$dev))
+sizedev <- sizedev[order(sizedev$V1),] 
+best.size.cv <- sizedev$V1[which.min(sizedev$V2)] 
+print(c("The Best tree size is", best.size.cv))
+
+pruned_el = prune.misclass(el.tree, best=best.size.cv) 
+draw.tree(pruned_el, cex = 0.4, nodeinfo = TRUE)
+set.seed(1)
+pred.el.Train.tree = predict(pruned_el, trn.cl, type="class") 
+pred.el.Test.tree = predict(pruned_el, tst.cl, type="class") 
+train.error.tree = calc_error_rate(pred.el.Train.tree, YTrain) 
+test.error.tree = calc_error_rate(pred.el.Test.tree, YTest)
+
+records[1,] = c(train.error.tree, test.error.tree)
+records
+
+pred.el.tree <- predict(pruned_el, tst.cl, type="vector") 
+pred.el.tree <- subset(pred.el.tree, select = c("Hillary Clinton", "Donald Trump"))
+colnames(pred.el.tree) <- as.factor(colnames(pred.el.tree))
+YTest.tree <- as.factor(YTest)
+YTest.tree <- ifelse(YTest.tree == "Donald Trump","Donald Trump","Hillary Clinton")
+
+
+predtree1 <- prediction(pred.el.tree[,1], YTest.tree)
+predtree <- performance(predtree1, measure="tpr", x.measure="fpr")
+plot(predtree, col="red", lwd=3, main="ROC curve")
+abline(0,1)
+auc_tree <- performance(predtree1, "auc")@y.values
+auc_tree
+```
+The Decision Tree model AUC is 0.9171493
+    
+14.
+    
+```{r}
+
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, k){
+  
+  train = (folddef!=chunkid)
+  
+  Xtr = Xdat[train,]
+  Ytr = Ydat[train]
+  
+  Xvl = Xdat[!train,]
+  Yvl = Ydat[!train]
+
+  ## get classifications for current training chunks
+  predYtr = knn(train = Xtr, test = Xtr, cl = Ytr, k = k)
+  
+  ## get classifications for current test chunk
+  predYvl = knn(train = Xtr, test = Xvl, cl = Ytr, k = k)
+  
+  data.frame(train.error = calc_error_rate(predYtr, Ytr),
+             val.error = calc_error_rate(predYvl, Yvl))
+}
+```
+
+```{r}
+library(plyr)
+
+error.folds = NULL
+kvec = c(1, seq(10, 50, length.out=5))
+
+set.seed(1) 
+for (j in kvec){ 
+  tmp = ldply(1:nfold, do.chunk,
+              folddef=folds, Xdat=XTrain, Ydat=YTrain, k=j) 
+  tmp$neighbors = j
+  error.folds = rbind(error.folds, tmp)
+}
+
+errors = melt(error.folds, id.vars='neighbors', value.name='error') 
+```
+
+```{r}
+val.error.means = errors %>% 
+  filter(variable=='val.error') %>%
+  group_by(neighbors, variable) %>%
+  summarise_at(.vars = vars(error), funs(mean)) %>%
+  ungroup() %>% 
+  filter(error==min(error))
+val.error.means 
+numneighbor = max(val.error.means$neighbors) 
+numneighbor
+```
+
+```{r}
+pred.YTrain.knn = knn(train=XTrain, test=XTrain, cl=YTrain, k=numneighbor)
+pred.YTest.knn = knn(train=XTrain, test=XTest, cl=YTrain, k=numneighbor)
+train.error.knn = calc_error_rate(pred.YTrain.knn, YTrain)
+test.error.knn = calc_error_rate(pred.YTest.knn, YTest)
+
+records[2,] = c(train.error.knn, test.error.knn)
+records
+```
+
+
+## Classification: principal components
+
+
+    
+```{r}
+pca.records = matrix(NA, nrow=3, ncol=2)
+colnames(pca.records) = c("train.error","test.error")
+rownames(pca.records) = c("tree","knn","Logistic Regression ")
+```
+
+15. 
+
+```{r}
+set.seed(1)
+trn.pc_all <- prcomp(trn.cl[,c(-1)],
+                 
+                 scale. = TRUE)
+trn.pc <- as.data.frame(trn.pc_all$x)
+#sum(ct.pc_all$sdev[1:17])/sum(ct.pc_all$sdev)
+trnvar <- trn.pc_all$sdev[1:17]^2
+par(mfrow=c(1, 2))
+plot(trnvar/sum(trnvar), xlab = "Principal Component",
+             ylab = "Proportion of Variance Explained",
+             type = "b") 
+plot(cumsum(trnvar/sum(trnvar)), xlab = "Principal Component",
+              ylab = "Cumulative Proportion of Variance Explained",
+              type = "b") #12  needed
+abline(h= .9,v=12,lty=5)
+numpc = which(cumsum(trnvar/sum(trnvar)) >= 0.90)[1]
+numpc
+```
+Answer: The number of minimum number of PCs needed to capture 90% of the variance is 12.
+
+16. 
+
+```{r}
+tr.pca_all <- prcomp(trn.cl[,-1], scale=TRUE)
+tr.pca <- as.data.frame(tr.pca_all$x[,1:numpc])
+tr.pca <- tr.pca %>% mutate(candidate = trn.cl$candidate)
+
+test.pca <- as.matrix(tst.cl[,-1])
+test.pca <- predict(tr.pca_all,newdata = test.pca)
+test.pca <- as.data.frame(test.pca[,1:numpc])
+test.pca <- test.pca %>% mutate(candidate = tst.cl$candidate)
+```
+
+17. 
+```{r}
+YTrain.pca = tr.pca$candidate
+XTrain.pca = dplyr::select(tr.pca,-candidate)
+YTest.pca = test.pca$candidate
+XTest.pca = dplyr::select(test.pca,-candidate)
+```
+
+
+```{r}
+set.seed(1)
+el.tree.pc <- tree(candidate~.,data = tr.pca, control = tree.control(nobs = nrow(tr.pca)))
+summary(el.tree.pc)
+```
+
+```{r}
+set.seed(1)
+el.cvtree.pc <- cv.tree(el.tree.pc, folds, FUN = prune.misclass, K = nfold) ##
+sizedev <- as.data.frame(cbind(el.cvtree.pc$size, el.cvtree.pc$dev))
+sizedev <- sizedev[order(sizedev$V1),] 
+best.size.cv <- sizedev$V1[which.min(sizedev$V2)] 
+print(c("The Best tree size is", best.size.cv))
+```
+
+```{r}
+pruned_el.pc = prune.misclass(el.tree.pc, best=best.size.cv) 
+draw.tree(pruned_el.pc, cex = 0.4, nodeinfo = TRUE)
+```
+
+```{r}
+pred.el.Train.tree = predict(pruned_el.pc, tr.pca, type="class") 
+pred.el.Test.tree = predict(pruned_el.pc, test.pca, type="class") 
+train.error.tree = calc_error_rate(pred.el.Train.tree, YTrain.pca) 
+test.error.tree = calc_error_rate(pred.el.Test.tree, YTest.pca)
+
+pca.records [1,] = c(train.error.tree, test.error.tree)
+pca.records 
+```
+
+```{r}
+pred.el.tree11 <- predict(pruned_el.pc, test.pca, type="vector") 
+pred.el.treepca <- subset(pred.el.tree11, select = c("Hillary Clinton", "Donald Trump"))
+colnames(pred.el.treepca) <- as.factor(colnames(pred.el.treepca))
+
+predtree11 <- prediction(pred.el.treepca[,1], YTest.tree)
+predtreepca <- performance(predtree11, measure="tpr", x.measure="fpr")
+plot(predtreepca, col="red", lwd=3, main="ROC curve")
+abline(0,1)
+auc_tree <- performance(predtree11, "auc")@y.values
+auc_tree
+```
+The PCA Decision Tree model AUC is 0.8790722
+
+18. 
+```{r, eval=doeval}
+set.seed(1) 
+nfold = 10
+folds = sample(cut(1:nrow(tr.pca), breaks=nfold, labels=FALSE))
+```
+
+```{r}
+
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, k){
+  
+  train = (folddef!=chunkid)
+  
+  Xtr = Xdat[train,]
+  Ytr = Ydat[train]
+  
+  Xvl = Xdat[!train,]
+  Yvl = Ydat[!train]
+
+  ## get classifications for current training chunks
+  predYtr = knn(train = Xtr, test = Xtr, cl = Ytr, k = k)
+  
+  ## get classifications for current test chunk
+  predYvl = knn(train = Xtr, test = Xvl, cl = Ytr, k = k)
+  
+  data.frame(train.error = calc_error_rate(predYtr, Ytr),
+             val.error = calc_error_rate(predYvl, Yvl))
+}
+```
+
+```{r}
+library(plyr)
+
+error.folds = NULL
+kvec = c(1, seq(10, 50, length.out=5))
+
+set.seed(1) 
+for (j in kvec){ 
+  tmp = ldply(1:nfold , do.chunk,
+              folddef=folds, Xdat=XTrain.pca, Ydat=YTrain.pca, k=j) 
+  tmp$neighbors = j
+  error.folds = rbind(error.folds, tmp)
+}
+errors = melt(error.folds, id.vars='neighbors', value.name='error') 
+```
+
+```{r}
+val.error.means = errors %>% 
+  filter(variable=='val.error') %>%
+  group_by(neighbors, variable) %>%
+  summarise_at(.vars = vars(error), funs(mean)) %>%
+  ungroup() %>% 
+  filter(error==min(error))
+val.error.means 
+numneighbor = max(val.error.means$neighbors) 
+numneighbor
+```
+
+```{r}
+#the best k is 20
+pred.YTrain.knn = knn(train=XTrain.pca, test=XTrain.pca, cl=YTrain.pca, k=numneighbor)
+pred.YTest.knn = knn(train=XTrain.pca, test=XTest.pca, cl=YTrain.pca, k=numneighbor)
+train.error.knn = calc_error_rate(pred.YTrain.knn, YTrain)
+test.error.knn = calc_error_rate(pred.YTest.knn, YTest)
+
+pca.records[2,] = c(train.error.knn, test.error.knn)
+pca.records
+```
+# Interpretation & Discussion
+
+19. 
+Answer:     Back to 2016, we were exposed to all kinds of news saying that she would win the election, and we thought the same, but the result was a big surprise for us. By looking closer to the election data, we might gain more insight about the election which allows candidates to prepare for 2020.
+    In the dimensionality reduction, we use principal component analysis to gain a better understanding of the county and sub-county level data, which helps us to find the influential predictors. For sub-county data, the two prominent loadings are Per capita income and transition, which surprise us that transition’s influence for the data. Although transit factor of sub-counties seems to be less relative to the election, the transition could be the foundation of the area, which helps economic growth, public services and brings resources. Also, when performing the decision tree, the variable got the first split is transit index. We assume the area has a lower transit index is considered as rural area and the urban area would have a higher transit index. The model shows that people living in the area has a lower transit index are more likely to vote for Donald Trump, and for the people living in the urban area, which has a higher transit index, they would vote for Hillary Clinton. The prediction matches the geographical outcome of problem 9. The prediction of decision tree is logical, since the urban area voters, mostly from the Democratic bases, would more favor of Hillary Clinton, and people from rural are likely to vote for Trump. Therefore, voters from the different area could determine who they would vote for, which makes the transit index such an important variable that could determine the voting pattern. From the data, we learn that some factors seem unrelated could have a huge effect on the predicting process, which suggests us to consider more factors for understanding the data.
+    To make the prediction result, we use decision tree and KNN to interpret the data. Since it is almost impossible to know how the data distributed, we should use flexible models that could adapt the data better, making KNN and decision tree become good options. Decision tree and KNN are easy to use and we don’t need to make assumptions on our data. From the result we have, decision tree performs the better. In the dimensionality reduction, principal component analysis helps to overcome the overfitting issues and learn the data. However, principal components are hardly readable, and if we dont select the right amount of data, the model will be overfitted. Training with the principal component data, we have KNN as our best model since it has smaller training error and test error comparing to the tree model. Overall, decision tree and KNN are  good options in our case.
+Although our models might not be the most accurate in predicting the outcome of the election, predictions we made are close to the result of the election of 2016, which indicates to study the data is useful for the election. 
+
+
+
+# Taking it further
+
+20. 
+
+```{r}
+#Logistic regression 
+library(ROCR)
+
+set.seed(1)
+lg_train_fit <-  glm(candidate~ ., data=trn.cl, family=binomial)
+summary(lg_train_fit)
+lg_train_predict <- predict(lg_train_fit, type = "response")
+summary(lg_train_predict)
+set.seed(1)
+#training and predicting
+predict.YTrain.log <- predict(lg_train_fit, data = trn.cl, type = "response")
+
+YTrain.log <- as.factor(as.character(YTrain))
+YTest.log <- as.factor(as.character(YTest))
+
+predYTest.log <- predict(lg_train_fit, newdata = tst.cl, type = "response")
+
+predLogistic <- prediction(predYTest.log, YTest.log)
+perfLogistic <- performance(predLogistic, measure="tpr", x.measure="fpr")
+
+#knn for ROC
+pred.YTest.knn.roc = knn(train=XTrain, test=XTest, cl=YTrain, k=10, prob = TRUE)
+prodknn <- attr(pred.YTest.knn.roc, "prob")
+predknn <- prediction(1-prodknn, YTest.log)
+perfknn <- performance(predknn, measure="tpr", x.measure="fpr")
+auc.knn <- performance(predknn, "auc")@y.values
+auc.knn
+
+{plot(perfLogistic, col="red", lwd=3, main="ROC curve")
+plot(predtree,  add=TRUE, col = "turquoise1")
+plot(perfknn,  add=TRUE, col = "green")
+abline(0,1)
+legend(0.6, 0.4, legend=c("Logistic Regression", "Decision Tree", "Knn"), col=c("red", "turquoise1", "green"), lty=1, cex=0.8)}
+
+
+
+auc_logistic <- performance(predLogistic, measure = "auc")
+auc_logistic <- auc_logistic@y.values[[1]]
+cat("Logistic Regression model AUC is", auc_logistic, "\n")
+
+fpr = performance(predLogistic, "fpr")@y.values[[1]]
+cutoff = performance(predLogistic, "fpr")@x.values[[1]]
+# FNR
+fnr = performance(predLogistic,"fnr")@y.values[[1]]
+
+# Add legend to the plot
+
+rate = as.data.frame(cbind(Cutoff=cutoff, FPR=fpr, FNR=fnr))
+rate$distance = sqrt((rate[,2])^2+(rate[,3])^2)
+index = which.min(rate$distance)
+best = rate$Cutoff[index]
+best
+# Plot
+matplot(cutoff, cbind(fpr,fnr), type="l",lwd=2, xlab="Threshold",ylab="Error Rate")
+# Add legend to the plot
+legend( 0.1812543, 1, legend=c("False Positive Rate","False Negative Rate"),
+col=c(1,2), lty=c(1,2))
+# Add the best value
+abline(v=best, col=3, lty=3, lwd=3)
+```
+
+```{r}
+#with the best threshold
+set.seed(1)
+
+predict.YTrain.log.cand <- factor(ifelse(predict.YTrain.log > 0.1812543, "Hillary Clinton", "Donald Trump"))
+
+predict.YTest.log.cand <- factor(ifelse(predYTest.log > 0.1812543,"Hillary Clinton", "Donald Trump"))
+
+YTrain.log <- as.factor(as.character(YTrain))
+train.error.logistic = calc_error_rate(predict.YTrain.log.cand, YTrain.log)
+
+YTest.log <- as.factor(as.character(YTest))
+test.error.logistic = calc_error_rate(predict.YTest.log.cand, YTest.log)
+
+records[3,] = c(train.error.logistic, test.error.logistic)
+records
+```   
+The ROC for Knn is 0.7120837, The Decision Tree model AUC is 0.9171493.
+
+```{r}
+#with pca data
+set.seed(1)
+lg_train_fit_pca <-  glm(candidate~ ., data=tr.pca, family=binomial)
+summary(lg_train_fit_pca)
+lg_train_predict_pac <- predict(lg_train_fit_pca, type = "response")
+summary(lg_train_predict_pac)
+set.seed(1)
+#training and predicting
+predict.YTrain.logpca <- predict(lg_train_fit_pca, data = trn.pc, type = "response")
+
+YTrain.log.pca <- as.factor(as.character(YTrain.pca))
+YTest.log.pca <- as.factor(as.character(YTest.pca))
+
+predYTest.log.pca <- predict(lg_train_fit_pca, newdata = XTest.pca, type = "response")
+
+predLogistic.pca <- prediction(predYTest.log.pca, YTest.log)
+
+perfLogistic1 <- performance(predLogistic.pca, measure="tpr", x.measure="fpr")
+
+auc_logisticpca <- performance(predLogistic.pca, measure = "auc")
+auc_logisticpca <- auc_logisticpca@y.values[[1]]
+cat("PCA Logistic Regression model AUC is",auc_logisticpca,"\n")
+fpr = performance(predLogistic.pca, "fpr")@y.values[[1]]
+cutoff = performance(predLogistic.pca, "fpr")@x.values[[1]]
+# FNR
+fnr = performance(predLogistic.pca,"fnr")@y.values[[1]]
+matplot(cutoff, cbind(fpr,fnr), type="l",lwd=2, xlab="Threshold",ylab="Error Rate")
+# Add legend to the plot
+legend(0.3, 1, legend=c("False Positive Rate","False Negative Rate"),
+col=c(1,2), lty=c(1,2))
+rate = as.data.frame(cbind(Cutoff=cutoff, FPR=fpr, FNR=fnr))
+rate$distance = sqrt((rate[,2])^2+(rate[,3])^2)
+index = which.min(rate$distance)
+best = rate$Cutoff[index]
+best
+```
+
+```{r}
+#with the best threshold
+set.seed(1)
+
+predict.YTrain.log.candPCA <- factor(ifelse(predict.YTrain.logpca > 0.2457648, "Hillary Clinton", "Donald Trump"))
+
+predict.YTest.log.candPCA <- factor(ifelse(predYTest.log.pca > 0.2457648,"Hillary Clinton", "Donald Trump"))
+
+YTrain.log.pca <- as.factor(as.character(YTrain.pca))
+YTest.log.pca <- as.factor(as.character(YTest.pca))
+
+
+train.error.logistic = calc_error_rate(predict.YTrain.log.candPCA, YTrain.log.pca)
+test.error.logistic = calc_error_rate(predict.YTest.log.candPCA, YTest.log.pca)
+
+#PCA knn for ROC
+pred.YTest.knn.roc.PCA = knn(train=XTrain.pca, test=XTest.pca, cl=YTrain.pca, k=20, prob = TRUE)
+prodknnPCA <- attr(pred.YTest.knn.roc.PCA, "prob")
+predknnPCA <- prediction(1-prodknnPCA, YTest.log.pca)
+perfknnPCA <- performance(predknnPCA, measure="tpr", x.measure="fpr")
+auc.knnPCA <- performance(predknnPCA, "auc")@y.values
+auc.knnPCA
+
+plot(perfLogistic1, col="red", lwd=3, main="ROC curve")
+plot(predtreepca,  add=TRUE, col = "turquoise1")
+plot(perfknnPCA,  add=TRUE, col = "green")
+abline(0,1)
+legend(0.6, 0.4, legend=c("Logistic Regression", "Decision Tree", "Knn"), col=c("red", "turquoise1", "green"), lty=1, cex=0.8)
+
+pca.records[3,] = c(train.error.logistic, test.error.logistic)
+pca.records
+
+```
+The PCA Decision Tree model AUC is 0.8790722, the PCA Knn AUC is 0.8672378.
+
+Answer: Overall, Logistic regression perfroms the best comparing with area under the curve in both datasets. 
+
